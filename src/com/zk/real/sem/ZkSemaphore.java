@@ -1,66 +1,57 @@
 package com.zk.real.sem;
 
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.locks.AbstractQueuedSynchronizer;
 
 /**
  * 分别以公平锁请求，非公平锁请求，如果请求不到就进入CHL队列
  */
 public class ZkSemaphore {
-    int permits;
-    boolean isFair;
-    private AbstractQueuedSynchronizer syn;
 
-    public void acquire() throws InterruptedException {
-        syn.acquireSharedInterruptibly(1);
-    }
-
-    public ZkSemaphore(int permits) {
-        syn = new NoFairSem(permits);
-    }
-
-    public ZkSemaphore(int permits,boolean isFair) {
-        syn = isFair?new NoFairSem(permits):new FairSem(permits);
-    }
-
-    /**
-     * 不公平的也写在到，
-     */
     static class Syn extends AbstractQueuedSynchronizer{
         public Syn(int permits) {
             setState(permits);
         }
-        // 获取锁逻辑下到这个方法：获取锁,获取失败进入CLH队列
-        final int nonfairTryAcquireShared(int acquires) {
-            for (;;) {
+
+        @Override
+        // 申请锁 重写aqs流程方法给acquireSharedInterruptibly()调用
+        protected int tryAcquireShared(int acquires) {
+            for (; ; ) {
                 int available = getState();
                 int remaining = available - acquires;
+                boolean b = compareAndSetState(available, remaining);
                 if (remaining < 0 ||
-                        compareAndSetState(available, remaining))
+                        b) { // 如果没有资源可以获取，或者获取锁成功。则返回
                     return remaining;
+                }
+
             }
         }
 
-        // 重写父类，让父类多态调用
         @Override
-        protected int tryAcquireShared(int acquires) {
-            return nonfairTryAcquireShared(acquires);
+        protected boolean tryReleaseShared(int releases) {
+            for (; ; ) {
+                int current = getState();
+                int next = current + releases;
+                if (next<current) throw new Error("Maximum permit count exceeded");
+                if (compareAndSetState(current, next)) {
+                    return true;
+                }
+            }
         }
+    }
+    private final Syn syn;
 
+    public ZkSemaphore(int avl) {
+        this.syn = new Syn(avl);
     }
 
-    static class NoFairSem extends Syn{
-        public NoFairSem(int permits) {
-            super(permits);
-        }
+    void acquire() throws InterruptedException {
+        syn.acquireSharedInterruptibly(1); // aqs写好了
     }
 
-    /**
-     * 公平的写到这
-     */
-    static class FairSem extends Syn{
-        public FairSem(int permits) {
-            super(permits);
-        }
+    void release(){
+        syn.releaseShared(1);
     }
 
 }
